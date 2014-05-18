@@ -1,0 +1,6 @@
+ - The LEG Architecture is a RISC architecture that specifies both 32-bit and 64-bit addressing system implementations.
+
+ - It supports advanced memmory management such as Paging, an IEEE 754 compliant FPU and an efficient and clean design to support multi-tasking operating systems.
+
+ - The simplicity of the LEG Architecture makes it possible to be implemented on a Field-Programmable Gate Array (FPGA), which turns the implemented CPU suitable for low power consumption applications.
+
