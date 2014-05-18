@@ -1,0 +1,30 @@
+See INSTALL for package build notes.
+
+
+The following steps, briefly explain how to setup and run a Virtual Machine:
+
+
+1. Creating a VM:
+
+   $ tools/vm_create /home/user/test_vm 10 64
+
+
+2. Installing a bootloader:
+
+   $ lavm_binst boot.bin bootloader /home/user/test_vm/storage/00storage
+
+
+3. Installing a kernel:
+
+   $ lavm_binst kernel.bin kernel /home/user/test_vm/storage/00storage
+
+
+4. Running a Virtual Machine:
+
+   $ lavm /home/user/test_vm
+
+
+5. Accessing Virtual Machine Console:
+
+   $ lavm console
+

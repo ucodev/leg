@@ -1,0 +1,7 @@
+#!/bin/bash
+
+make clean
+
+rm -f .compiler
+rm -f .done
+

@@ -1,0 +1,551 @@
+#!/usr/bin/python
+
+#  LEG Architecture Assembler v0.1a
+
+#  Copyright 2012-2014 Pedro A. Hortas (pah@ucodev.org)
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+
+import sys
+import re
+import socket
+from struct import *
+
+opcode = {
+	'cpvr': [ 0x01, 2 ],
+	'cpvl': [ 0x02, 2 ],
+	'cpr':  [ 0x03, 2 ],
+	'cprr': [ 0x04, 2 ],
+	'cmp':  [ 0x05, 2 ],
+	'jmp':  [ 0x06, 1 ],
+	'call': [ 0x07, 1 ],
+	'ret':  [ 0x08, 0 ],
+	'arth': [ 0x09, 2 ],
+	'lgic': [ 0x0A, 2 ],
+	'intr': [ 0x0B, 1 ],
+	'ceb':  [ 0x0C, 2 ],
+	'nop':  [ 0x0D, 0 ],
+	'ltsk': [ 0x0E, 0 ]
+}
+
+register = {
+	'rip':   0x00,
+	'rst':   0x04,
+	'rff':	 0x08,
+	'rfa':	 0x0C,
+	'rbt':   0x10,
+	'rct':   0x14,
+	'rpa':   0x18,
+	'rra':   0x1C,
+	'rsa':   0x20,
+	'rcmp':  0x24,
+	'rlgic': 0x28,
+	'rarth': 0x2C,
+	'rgp1':  0x30,
+	'rgp2':  0x34,
+	'rgp3':  0x38,
+	'rgp4':  0x3C,
+	'rgp5':  0x40,
+	'rgp6':  0x44,
+	'rgp7':  0x48,
+	'rgp8':  0x4C,
+	'ral1':  0x50,
+	'ral2':  0x54,
+	'ral3':  0x58,
+	'ral4':  0x5C,
+	'rfp1':  0x60,
+	'rfp2':  0x64,
+	'rfp3':  0x68,
+	'rfp4':  0x6C,
+}
+
+address = {
+	'bootloader': 0x3F8,
+	'kernel': 0x1000,
+	'cur':  0x00
+}
+
+tags = {}
+
+binary = []
+
+def translate_operand_type(operand):
+	test = None
+
+	try:
+		test = register[operand]
+	except KeyError:
+		pass
+
+	if test != None:
+		return "register"
+
+	try:
+		test = tags[operand]
+	except KeyError:
+		pass
+
+	if test != None:
+		return "tags"
+
+	try:
+		test = int(operand)
+	except ValueError:
+		pass
+
+	if test != None:
+		return "int"
+
+	try:
+		test = int(operand, 0)
+	except ValueError:
+		pass
+
+	if test != None:
+		return "hex"
+
+	return None
+
+def process_instruction_2arg(i, a1, a2, bin_update=True):
+	global address
+
+	# Sanity check
+	try:
+		if opcode[i][1] != 2:
+			print "Invalid number of arguments for '%s': 2." % i
+			return False
+	except KeyError:
+		print "Invalid instruction '%s'." % i
+		return False
+
+	# Setup initial values
+	opcode_ref = 0x00
+	operand1 = None
+	operand2 = None
+
+	# Set instruction ID
+	try:
+		opcode_ref = opcode[i][0]
+	except KeyError:
+		print "Invalid instruction '%s'." % i
+		return False
+
+	# Compute operand1
+	operand1_type = translate_operand_type(a1)
+
+	if bin_update == True:
+		if operand1_type == "register":
+			opcode_ref |= register[a1] << 8
+		elif operand1_type == "tags":
+			operand1 = tags[a1]
+		elif operand1_type == "int":
+			operand1 = int(a1)
+		elif operand1_type == "hex":
+			operand1 = int(a1, 0)
+		else:
+			print "Invalid argument: %s" % a1
+			return False
+
+	# Compute operand2
+	operand2_type = translate_operand_type(a2)
+
+	if bin_update == True:
+		if operand2_type == "register":
+			opcode_ref |= register[a2] << 16
+		elif operand2_type == "tags":
+			operand2 = tags[a2]
+		elif operand2_type == "int":
+			operand2 = int(a2)
+		elif operand2_type == "hex":
+			operand2 = int(a2, 0)
+		else:
+			print "Invalid argument: %s" % a1
+			return False
+
+	# Update binary if necessary
+	if bin_update == True:
+		binary.append(opcode_ref)
+
+		if operand1 != None:
+			binary.append(operand1)
+
+		if operand2 != None:
+			binary.append(operand2)
+
+	# Update current address
+	address['cur'] += 4
+
+	if (operand1 != None) and (bin_update == True):
+		address['cur'] += 4
+	elif (bin_update == False) and (operand1_type != "register"):
+		address['cur'] += 4
+
+	if (operand2 != None) and (bin_update == True):
+		address['cur'] += 4
+	elif (bin_update == False) and (operand2_type != "register"):
+		address['cur'] += 4
+
+	return True
+
+def process_instruction_1arg(i, a1, bin_update=True):
+	global address
+
+	try:
+		if opcode[i][1] != 1:
+			print "Invalid number of arguments for '%s': 1." % i
+			return False
+	except KeyError:
+		print "Invalid instruction '%s'." % i
+		return False
+
+	# Setup initial values
+	opcode_ref = 0x00
+	operand1 = None
+
+	# Set instruction ID
+	try:
+		opcode_ref = opcode[i][0]
+	except KeyError:
+		print "Invalid instruction '%s'." % i
+		return False
+
+	# Compute operand1
+	operand_type = translate_operand_type(a1)
+
+	if bin_update == True:
+		if operand_type == "register":
+			opcode_ref |= register[a1] << 8
+		elif operand_type == "tags":
+			operand1 = tags[a1]
+		elif operand_type == "int":
+			operand1 = int(a1)
+		elif operand_type == "hex":
+			operand1 = int(a1, 0)
+		else:
+			print "Invalid argument: %s" % a1
+			return False
+
+	# INTR Instruction has a special literal
+	if (i == "intr") and (bin_update == True):
+		opcode_ref |= operand1 << 8
+		operand1 = None
+
+	# Update binary if necessary
+	if bin_update == True:
+		binary.append(opcode_ref)
+
+		if operand1 != None:
+			binary.append(operand1)
+
+	# Update current address
+	address['cur'] += 4
+
+	if (operand1 != None) and (bin_update == True):
+		address['cur'] += 4
+	elif (bin_update == False) and (operand_type != "register") and (i != "intr"):
+		address['cur'] += 4
+
+	return True
+
+def process_instruction_0arg(i, bin_update=True):
+	global address
+
+	try:
+		if opcode[i][1] != 0:
+			print "Invalid number of arguments for '%s'." % i
+			return False
+	except KeyError:
+		print "Invalid instruction '%s'." % i
+		return False
+
+	try:
+		if bin_update == True:
+			binary.append(opcode[i][0])
+	except KeyError:
+		print "Fatal error while processing instruction '%s'" % i
+		return False
+
+	address['cur'] += 4
+
+	return True
+
+def process_tag(tag):
+	tags[tag] = address['cur']
+
+def process_rodata(data, bin_update=True):
+	zdata = data.decode('string_escape') + "\0"
+	dword = 0
+	tbytes = 0
+
+	for (i, ch) in enumerate(zdata):
+		if i and not (i % 4):
+			if bin_update == True:
+				binary.append(dword)
+			tbytes += 4
+			dword = 0
+		dword |= ord(ch) << (((3 - (i % 4)) << 3))
+
+	if (i % 4):
+		if (bin_update == True):
+			binary.append(dword)
+		tbytes += 4
+
+	address['cur'] += tbytes
+
+def process_rwdata(data, bin_update=True):
+	zdata = data.decode('string_escape') + "\0"
+	dword = 0
+	tbytes = 0
+
+	for (i, ch) in enumerate(zdata):
+		if i and not (i % 4):
+			if bin_update == True:
+				binary.append(dword)
+			tbytes += 4
+			dword = 0
+		dword |= ord(ch) << (((3 - (i % 4)) << 3))
+
+	if (i % 4):
+		if (bin_update == True):
+			binary.append(dword)
+		tbytes += 4
+
+	address['cur'] += tbytes
+
+def preprocess_asm(code):
+	for (nr, line) in enumerate(code):
+		nr += 1
+		instruction = ""
+		arg1 = ""
+		arg2 = ""
+
+		# Search for tags
+		pat = re.search(r"^\s*\.(\w+):\s*\#*.*$", line)
+
+		if pat:
+			process_tag(pat.group(1))
+
+			continue
+
+		# Search for 2 arg instruction
+		pat = re.search(r"^\s*(\w+)\s+(\w+)\s*,\s*(\w+)\s*\#*.*$", line)
+
+		if pat:
+			instruction = pat.group(1)
+			arg1 = pat.group(2)
+			arg2 = pat.group(3)
+
+			if not process_instruction_2arg(instruction, arg1, arg2, bin_update=False):
+				assembler_error(sys.argv[1], nr, line, msg="Unable to generate instruction code for '%s'" % line.split(' ')[0].strip(' ').strip('\t'))
+
+			continue
+
+		# Search for 1 arg instruction
+		pat = re.search(r"^\s*(\w+)\s+(\w+)\s*\#*.*$", line)
+
+		if pat:
+			instruction = pat.group(1)
+			arg1 = pat.group(2)
+
+			if not process_instruction_1arg(instruction, arg1, bin_update=False):
+				assembler_error(sys.argv[1], nr, line, msg="Unable to generate instruction code for '%s'" % line.split(' ')[0].strip(' ').strip('\t'))
+
+			continue
+
+		# Search for instruction without args
+		pat = re.search(r"^\s*(\w+)\s*\#*.*$", line)
+
+		if pat:
+			instruction = pat.group(1)
+
+			if not process_instruction_0arg(instruction, bin_update=False):
+				assembler_error(sys.argv[1], nr, line, msg="Unable to generate instruction code for '%s'." % line.split(' ')[0].strip(' ').strip('\t'))
+
+			continue
+
+		# Search heap read-only regions
+		pat = re.search(r"^\s*\.rodata\s+([\w\_]+)\s+\"(.+)\"\s*\#*.*$", line)
+
+		if pat:
+			process_tag(pat.group(1))
+
+			process_rodata(pat.group(2), bin_update=False)
+
+			continue
+
+		# Search heap read/write regions
+		pat = re.search(r"^\s*\.rwdata\s+([\w\_]+)\s+\"(.+)\"\s*\#*.*$", line)
+
+		if pat:
+			process_tag(pat.group(1))
+
+			process_rwdata(pat.group(2), bin_update=False)
+
+			continue
+
+		# Discard blank and comment lines
+		line = line.strip(' ').strip('\t')
+
+		if not line or line[0] == '#':
+			continue
+
+		assembler_error(sys.argv[1], nr, line, msg="Unrecognized statement")
+
+def assembler_error(filename, nr, line, msg=""):
+	line = line.strip(' ').strip('\t')
+
+	print "Assembler error."
+	print "%s:%d:error:%s:%s" % (filename, nr, msg, line)
+
+	sys.exit(1)
+
+def print_tags(tags):
+	print "Tags:"
+	for tag in tags:
+		print "%s\t\tat 0x%.8X" % (tag, tags[tag])
+
+def print_binary(binary):
+	print "Binary dump:"
+	sys.stdout.write("[ ")
+
+	for val in binary:
+		sys.stdout.write("0x%.2X, " % val)
+
+	print "]"
+
+if __name__ == "__main__":
+	if len(sys.argv) != 4:
+		print "Usage: %s <asm source> <output bin> <target>" % sys.argv[0]
+		print "\tTargets:"
+		print "\t\tbootloader - bootloader binary"
+		print "\t\tkernel     - kernel binary"
+
+		sys.exit(1)
+
+	# Assign base address to current address regarding binary type
+	try:
+		address['cur'] = address[sys.argv[3]]
+	except KeyError:
+		print "Invalid target: %s" % sys.argv[3]
+		sys.exit(1)
+
+	# Load source file
+	fp = open(sys.argv[1], "r")
+
+	code = fp.read().split("\n");
+
+	fp.close()
+
+	# Preprocess assembly code
+	preprocess_asm(code)
+
+	# Set, again, current address to base address after preprocess
+	address['cur'] = address[sys.argv[3]]
+
+	# Start opcode generation
+	for (nr, line) in enumerate(code):
+		nr += 1
+		instruction = ""
+		arg1 = ""
+		arg2 = ""
+
+		# Search for tags
+		pat = re.search(r"^\s*\.(\w+):\s*\#*.*$", line)
+
+		if pat:
+			#process_tag(pat.group(1))
+
+			continue
+
+		# Search for 2 arg instruction
+		pat = re.search(r"^\s*(\w+)\s+(\w+)\s*,\s*(\w+)\s*\#*.*$", line)
+
+		if pat:
+			instruction = pat.group(1)
+			arg1 = pat.group(2)
+			arg2 = pat.group(3)
+
+			if process_instruction_2arg(instruction, arg1, arg2):
+				continue
+
+			assembler_error(sys.argv[1], nr, line, msg="Invalid instruction argument or format")
+
+		# Search for 1 arg instruction
+		pat = re.search(r"^\s*(\w+)\s+(\w+)\s*\#*.*$", line)
+
+		if pat:
+			instruction = pat.group(1)
+			arg1 = pat.group(2)
+
+			if process_instruction_1arg(instruction, arg1):
+				continue
+
+			assembler_error(sys.argv[1], nr, line, msg="Invalid instruction argument or format")
+
+		# Search for instruction without args
+		pat = re.search(r"^\s*(\w+)\s*\#*.*$", line)
+
+		if pat:
+			instruction = pat.group(1)
+
+			if process_instruction_0arg(instruction):
+				continue
+
+			assembler_error(sys.argv[1], nr, line, msg="Invalid instruction argument or format")
+	
+		# Search heap read-only regions
+		pat = re.search(r"^\s*\.rodata\s+([\w\_]+)\s+\"(.+)\"\s*\#*.*$", line)
+
+		if pat:
+			#process_tags(pat.group(1))
+
+			process_rodata(pat.group(2))
+
+			continue
+
+		# Search heap read/write regions
+		pat = re.search(r"^\s*\.rwdata\s+([\w\_]+)\s+\"(.+)\"\s*\#*.*$", line)
+
+		if pat:
+			#process_tags(pat.group(1))
+
+			process_rwdata(pat.group(2))
+
+		# Discard blank and comment lines
+		line = line.strip(' ').strip('\t')
+
+		if not line or line[0] == '#':
+			continue
+
+		# Default error for unrecognized statements
+		assembler_error(sys.argv[1], nr, line, msg="Unrecognized statement")
+
+	# Print debugging information
+	print_tags(tags)
+	print ""
+	for (i, dword) in enumerate(binary):
+		print ("0x%.8X" % (address[sys.argv[3]] + (i*4))) + (": 0x%.8X" % dword)
+
+	# Generate binary output file and exit
+	fp = open(sys.argv[2], "w+b")
+
+	for word in binary:
+		fp.write(pack('I', socket.htonl(word)))
+
+	fp.close()
+
+	print "\nSuccess."
+
+	sys.exit(0)
+
